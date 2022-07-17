@@ -1,104 +1,98 @@
-use std::{mem, sync::Arc, fmt::Display};
+use std::sync::Arc;
 
 
-const C_SIZE: usize = 10;
 
-pub trait HasLength {
-    fn len(&self) -> usize;
-}
+const THREAD_N: usize = 8;
 
-impl<T> HasLength for &Vec<T> {
-    fn len(&self) -> usize {
-        Vec::len(self)
-    }
-}
 
-impl<T> HasLength for &[T] {
-    fn len(&self) -> usize {
-        <[T]>::len(self)
-    }
-}
-
-struct ParChunker<I: Iterator, F> {
-    iter: I,
-    chunk: Vec<I::Item>,
-    //max_total_size: usize,
+pub struct ChunkIter<'a, T, F, R>
+where 
+    T: Sized + Send + Sync, 
+    F: Fn(&[T]) ->  R + Send + Sync,
+    R: Sized + Send + Sync,
+     // R: Sized + Send + Sync 
+{
+    values: &'a Arc<[T]>,
+    start_index: usize,
+    end_index: usize,
     chunk_size: usize,
-    total_size: usize,
     f: F
 }
 
-impl<I, F, R> Iterator for ParChunker<I, F>
-where
-    I: Iterator + Send,
-    I::Item: Send + Display + Copy,
-    F: Fn(I::Item) -> R + Send + Sync,
-    R: Send
-{
-    type Item = Vec<I::Item>;
-    
+
+impl<'a, T: Sized + Send + Sync, F: Fn(&[T]) -> R + Send + Sync, R: Sized + Send + Sync> Iterator for ChunkIter<'a, T, F, R> {
+    type Item = R;
+
+
     fn next(&mut self) -> Option<Self::Item> {
+
         loop {
-            match self.iter.next() {
-                Some(item) => {  
-                    (self.f)(item);
-                    self.total_size += 1;
-                    self.chunk.push(item);
-                    //println!("{}", item.len());
- 
-                    if self.total_size >= self.chunk_size {
-                        self.total_size = 0;
-                        return Some(mem::take(&mut self.chunk))
-                    }
-                }
-                None => return if self.chunk.is_empty() {
-                    None
+
+            let c_size: usize  = self.end_index - self.start_index; 
+
+
+            //(self.f)()
+
+            if self.end_index < self.values.len() {       
+
+                if c_size < self.chunk_size { 
+                    self.end_index += 1;
                 } else {
-                    Some(mem::take(&mut self.chunk))
+                    let out = Some((self.f)(&self.values[self.start_index..self.end_index]));
+                    self.start_index = self.end_index;
+                    return out;
                 }
+
+            } else if c_size > 0 {
+                let out = Some((self.f)(&self.values[self.start_index..self.end_index]));
+                self.start_index = self.end_index;
+                return out;
+            } else {
+                return None
             }
         }
     }
 }
 
-trait ChunkExt <I, F, R>: Iterator + Sized where 
-    I: Iterator,
-    F: Fn(I::Item) -> R + Sync + Send + Sized,
-    R: Sync + Send
-{
-    fn par_chunks(self, f: F) -> ParChunker<Self, F> {
-        ParChunker {
-            iter: self,
-            chunk: Vec::new(), 
-            chunk_size: C_SIZE,
-            total_size: 0,
+pub trait IntoChunkIter<'a, T: Sized + Send + Sync, F: Fn(&[T]) -> R + Send + Sync, R: Sized + Send + Sync >{
+    fn into_chunk_iter(&'a self, f: F) ->  ChunkIter<'a, T, F, R>;
+}
+
+
+impl<'a, T: Send + Sync, F: Fn(&[T]) -> R + Send + Sync, R: Sized + Send + Sync> IntoChunkIter<'a, T, F, R> for Arc<[T]> {
+
+    fn into_chunk_iter(&'a self, f: F) ->  ChunkIter<'a, T, F, R> {     
+        ChunkIter {
+            chunk_size: self.len() / THREAD_N + 1, 
+            values: self,
+            start_index: 0,
+            end_index: 0,
             f
         }
     }
-}
 
-impl<I: Iterator, F: Fn(I::Item) -> R + Send + Sync, R: Send + Sync> ChunkExt<I, F, R> for I {}
+} 
+
+
 
 
 fn main() {
 
-    let v: Vec<i32> = (0..453).map(|i| i).collect();
-    let a: Arc<[i32]> = Arc::from(v);
+    let v: Vec<i32> = (0..20).collect();
 
-    let c = a
-        .iter()
-        .par_chunks(|a| println!("{:?}", a));
+    let b: Arc<[i32]> = Arc::from(v);
 
-    let t: Vec<Vec<&i32>> = c.collect();
-
-    println!("{:?}", t);
+    for _t in b.into_chunk_iter(|a| {
+        println!("{:?}", a);
+        10
+    }) {}
 
 
+    //b.into_
 
-    //for g in c {}
+    /*
+    for a in v.into_chunk_iter() {
+        println!("{:?}", a);
+    } */
 
-    //i.next();
-
-
-    //println!("{}", a);
 }
